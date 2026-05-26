@@ -1,0 +1,50 @@
+{
+  "name": "hardhat-project",
+  "scripts": {
+    "hardhat-clean": "hardhat clean",
+    "hardhat-compile": "hardhat compile",
+    "hardhat-test": "hardhat test",
+    "hardhat-deploy": "hardhat deploy",
+    "hardhat-coverage": "hardhat coverage",
+    "arb": "ts-node arbitrage/server.ts"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^1.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^2.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.2",
+    "@nomiclabs/hardhat-ethers": "^2.0.0",
+    "@openzeppelin/hardhat-upgrades": "^3.0.2",
+    "@types/dotenv": "^8.2.0",
+    "cz-conventional-changelog": "^3.3.0",
+    "ethers": "^6.9.2",
+    "hardhat": "^2.12.7",
+    "hardhat-deploy": "^0.11.44",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "@chainlink/contracts": "^0.8.0",
+    "@openzeppelin/contracts": "^5.0.1",
+    "@openzeppelin/contracts-upgradeable": "^5.0.0",
+    "@typechain/ethers-v5": "^10.1.0",
+    "@typechain/hardhat": "^6.1.2",
+    "@types/chai": "^4.2.0",
+    "@types/mocha": ">=9.1.0",
+    "@types/ws": "^8.18.1",
+    "axios": "^1.4.0",
+    "csv-parse": "^5.5.3",
+    "dotenv": "^16.1.4",
+    "hardhat-gas-reporter": "^1.0.8",
+    "openzeppelin-solidity-4.3.2": "npm:openzeppelin-solidity@4.3.2",
+    "solidity-coverage": "^0.8.1",
+    "typechain": "^8.1.0",
+    "typescript": "^5.3.3",
+    "ws": "^8.21.0"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  }
+}
