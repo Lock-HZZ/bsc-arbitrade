@@ -4,6 +4,10 @@ pragma solidity ^0.8.22;
 import "./interfaces/IRouter02.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+interface IToken {
+    function whiteList(address account) external view returns (bool);
+}
+
 contract Arbitrage {
     address public immutable owner;
     IRouter02 public pancakeRouter = IRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
@@ -18,6 +22,11 @@ contract Arbitrage {
         _;
     }
 
+    modifier onlyWhitelisted(address tokenOut) {
+        require(IToken(tokenOut).whiteList(msg.sender), "not whitelisted");
+        _;
+    }
+
     /// @param tokenIn        输入代币（如 BUSD/USDT）
     /// @param tokenOut       套利目标代币
     /// @param amountIn       投入数量
@@ -29,7 +38,7 @@ contract Arbitrage {
         uint256 amountIn,
         uint256 minProfit,
         bool buyOnPancake
-    ) external onlyOwner {
+    ) external onlyWhitelisted(tokenOut) {
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
         (IRouter02 buyRouter, IRouter02 sellRouter) = buyOnPancake

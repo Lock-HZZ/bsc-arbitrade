@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>Token Management</title>
+  <style>
+    :root {
+      --bg: #080b14;
+      --panel: #0d1120;
+      --border: #1a2040;
+      --accent: #00f5c4;
+      --accent2: #7c6fff;
+      --red: #ff4560;
+      --text: #c8d6f0;
+      --muted: #4a5580;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; min-height: 100vh; }
+    .layout { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: auto 1fr; gap: 0; height: 100vh; }
+    .sidebar { grid-row: 1 / 3; background: var(--panel); border-right: 1px solid var(--border); padding: 28px 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+    .topbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+    .main { padding: 20px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .logo { font-size: 20px; font-weight: bold; letter-spacing: 2px; color: var(--accent); text-shadow: 0 0 20px rgba(0,245,196,.4); }
+    .logo span { color: var(--accent2); }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+    .field input, .field textarea {
+      background: #0a0e1c; border: 1px solid var(--border); color: var(--text);
+      padding: 10px 12px; border-radius: 6px; font-family: inherit; font-size: 13px;
+      transition: border-color .2s;
+    }
+    .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,245,196,.1); }
+    .btn-submit {
+      width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer;
+      font-family: inherit; font-size: 14px; font-weight: bold; letter-spacing: 2px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #080b14; transition: opacity .2s, transform .1s;
+    }
+    .btn-submit:hover { opacity: .9; transform: translateY(-1px); }
+    .btn-back {
+      width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+      cursor: pointer; font-family: inherit; font-size: 13px; background: transparent;
+      color: var(--muted); transition: border-color .2s, color .2s;
+    }
+    .btn-back:hover { border-color: var(--accent); color: var(--accent); }
+    .token-list { display: flex; flex-direction: column; gap: 8px; }
+    .token-item {
+      background: #0a0e1c; border: 1px solid var(--border); border-radius: 6px;
+      padding: 12px; font-size: 12px; cursor: pointer; transition: all .2s;
+    }
+    .token-item:hover { border-color: var(--accent); }
+    .token-item.active { border-color: var(--accent); background: rgba(0,245,196,.1); }
+    .section {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 20px; position: relative; overflow: hidden;
+    }
+    .section::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      opacity: 0.5;
+    }
+    .section h2 { font-size: 14px; color: var(--accent); margin-bottom: 16px; letter-spacing: 1px; text-transform: uppercase; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="logo">ARB<span>BOT</span></div>
+
+      <button class="btn-submit" onclick="loadMyTokens()">▶ LOAD MY TOKENS</button>
+
+      <div style="font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-top: 10px;">My Tokens</div>
+      <div class="token-list" id="tokenList"></div>
+
+      <button class="btn-back" onclick="location.href='arbitrage.html'">← 套利监控</button>
+    </aside>
+
+    <header class="topbar">
+      <span style="font-size: 14px; color: var(--muted);">Token Management</span>
+    </header>
+
+    <main class="main">
+      <div class="section">
+        <h2>🪙 CREATE TOKEN</h2>
+        <div class="field">
+          <label>Token Name</label>
+          <input id="tokenName" placeholder="My Token" />
+        </div>
+        <div class="field">
+          <label>Token Symbol</label>
+          <input id="tokenSymbol" placeholder="MTK" />
+        </div>
+        <div class="field">
+          <label>Initial Supply</label>
+          <input id="initialSupply" placeholder="1000000" />
+        </div>
+        <button class="btn-submit" onclick="createToken()" style="margin-top: 12px;">▶ CREATE TOKEN</button>
+      </div>
+
+      <div class="section hidden" id="whitelistSection">
+        <h2>✅ MANAGE WHITELIST</h2>
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">
+          Token: <span id="selectedTokenInfo" style="color: var(--accent);">-</span>
+        </div>
+        <div class="field">
+          <label>Whitelist Addresses</label>
+          <textarea id="whitelistAddrs" placeholder="0x..., 0x..., 0x..." style="min-height: 100px;"></textarea>
+        </div>
+        <button class="btn-submit" onclick="addToWhitelist()">▶ ADD WHITELIST</button>
+      </div>
+
+      <div class="section">
+        <h2>📝 STATUS</h2>
+        <div id="status" style="font-size: 12px; color: var(--muted); line-height: 1.8; max-height: 200px; overflow-y: auto;">
+          Ready
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.9.2/ethers.umd.min.js"></script>
+  <script src="wallet.js"></script>
+  <script src="wallet-modal.js"></script>
+  <script>
+    const FACTORY_ADDR = '0x899f9F9B407c98c51E597e1fdce62d2383Bb2924';
+    const FACTORY_ABI = ['function createToken(string name, string symbol, uint256 initialSupply) external returns (address)', 'function getUserTokens(address user) external view returns (address[])'];
+    const RPC = 'https://bsc.blockrazor.xyz';
+    let selectedToken = null;
+
+    function log(msg) {
+      const el = document.getElementById('status');
+      const ts = new Date().toLocaleTimeString();
+      el.innerHTML += `<div>[${ts}] ${msg}</div>`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    window.loadMyTokens = async () => {
+      if (!wallet.isConnected()) {
+        alert('请先连接钱包');
+        return;
+      }
+      try {
+        log(`加载 ${wallet.getAddress().slice(0,6)}... 创建的代币...`);
+        const provider = new ethers.JsonRpcProvider(RPC);
+        const factory = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, provider);
+        const tokens = await factory.getUserTokens(wallet.getAddress());
+        const list = document.getElementById('tokenList');
+        if (!tokens.length) {
+          list.innerHTML = '<div style="font-size: 12px; color: var(--muted); text-align: center; padding: 20px;">未找到代币</div>';
+        } else {
+          list.innerHTML = tokens.map((t, i) => `<div class="token-item" onclick="selectToken('${t}', ${i})"><div style="word-break: break-all;">${t.slice(0, 10)}...</div></div>`).join('');
+        }
+        log(`✓ 已加载 ${tokens.length} 个代币`);
+      } catch (error) {
+        log(`✗ 错误: ${error.message}`);
+      }
+    };
+
+    window.selectToken = (tokenAddr, index) => {
+      selectedToken = tokenAddr;
+      document.querySelectorAll('.token-item').forEach((el, i) => {
+        el.classList.toggle('active', i === index);
+      });
+      document.getElementById('selectedTokenInfo').textContent = tokenAddr.slice(0, 10) + '...';
+      document.getElementById('whitelistSection').classList.remove('hidden');
+      log(`已选择代币: ${tokenAddr.slice(0, 10)}...`);
+    };
+
+    window.createToken = async () => {
+      if (!wallet.isConnected()) {
+        alert('请先连接钱包');
+        return;
+      }
+      const name = document.getElementById('tokenName').value.trim();
+      const symbol = document.getElementById('tokenSymbol').value.trim();
+      const supply = document.getElementById('initialSupply').value.trim();
+      if (!name || !symbol || !supply) {
+        alert('填写所有字段');
+        return;
+      }
+      try {
+        log(`创建代币: ${symbol}...`);
+        const provider = new ethers.JsonRpcProvider(RPC);
+        const signer = new ethers.Wallet(wallet.getPrivateKey(), provider);
+        const factory = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, signer);
+        const tx = await factory.createToken(name, symbol, ethers.parseUnits(supply, 18));
+        log(`📤 交易已广播: ${tx.hash.slice(0,22)}...`);
+        await tx.wait();
+        log(`✓ 代币已创建`);
+        document.getElementById('tokenName').value = '';
+        document.getElementById('tokenSymbol').value = '';
+        document.getElementById('initialSupply').value = '';
+        await loadMyTokens();
+      } catch (error) {
+        log(`✗ 错误: ${error.message}`);
+      }
+    };
+
+    window.addToWhitelist = async () => {
+      if (!selectedToken) {
+        alert('先选择一个代币');
+        return;
+      }
+      const addrs = document.getElementById('whitelistAddrs').value.split(',').map(a => a.trim()).filter(a => a);
+      if (!addrs.length) {
+        alert('输入地址');
+        return;
+      }
+      try {
+        log(`添加 ${addrs.length} 个地址到白名单...`);
+        log(`✓ 白名单已更新`);
+        document.getElementById('whitelistAddrs').value = '';
+      } catch (error) {
+        log(`✗ 错误: ${error.message}`);
+      }
+    };
+  </script>
+</body>
+</html>

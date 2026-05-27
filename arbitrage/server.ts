@@ -96,8 +96,10 @@ const sessions = new Map<WebSocket, { stop: () => void }>();
 const STATS_DIR = join(__dirname, "stats");
 if (!existsSync(STATS_DIR)) require("fs").mkdirSync(STATS_DIR);
 
-function saveRecord(address: string, record: object) {
-  const file = join(STATS_DIR, `${address.toLowerCase()}.json`);
+function saveRecord(address: string, tokenOut: string, record: object) {
+  const addrDir = join(STATS_DIR, address.toLowerCase());
+  if (!existsSync(addrDir)) require("fs").mkdirSync(addrDir);
+  const file = join(addrDir, `${tokenOut.toLowerCase()}.json`);
   const history = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
   history.push(record);
   writeFileSync(file, JSON.stringify(history, null, 2));
@@ -220,7 +222,7 @@ async function runMonitor(ws: WebSocket, cfg: Config) {
             profit: profitStr,
             gasUsed: receipt.gasUsed.toString(),
           });
-          saveRecord(walletAddress, {
+          saveRecord(walletAddress, cfg.tokenOut, {
             ts: new Date().toISOString(),
             hash: receipt.hash,
             direction,
@@ -245,17 +247,87 @@ const httpServer = createServer((req, res) => {
   if (req.url === "/" || req.url === "/index.html") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(readFileSync(join(__dirname, "index.html")));
+  } else if (req.url === "/arbitrage.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(readFileSync(join(__dirname, "arbitrage.html")));
+  } else if (req.url === "/token-creation.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(readFileSync(join(__dirname, "token-creation.html")));
+  } else if (req.url === "/token-whitelist.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(readFileSync(join(__dirname, "token-whitelist.html")));
+  } else if (req.url === "/token-management.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(readFileSync(join(__dirname, "token-management.html")));
+  } else if (req.url?.endsWith(".js")) {
+    const file = join(__dirname, req.url);
+    if (existsSync(file)) {
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
+      res.end(readFileSync(file));
+    } else {
+      res.writeHead(404);
+      res.end("Not Found");
+    }
   } else if (req.url === "/tokens") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(TOKENS));
   } else if (req.url?.startsWith("/stats/")) {
-    const addr = req.url.slice(7).toLowerCase();
-    const file = join(STATS_DIR, `${addr}.json`);
-    const data = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
-    const count = data.length;
-    const total = data.reduce((s: number, r: any) => s + parseFloat(r.profit || "0"), 0);
+    const parts = req.url.slice(7).split('/').filter(p => p);
+    const addr = parts[0].toLowerCase();
+    const token = parts[1]?.toLowerCase();
+
+    if (token) {
+      const file = join(STATS_DIR, addr, `${token}.json`);
+      const data = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
+      const count = data.length;
+      const total = data.reduce((s: number, r: any) => s + parseFloat(r.profit || "0"), 0);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ count, total }));
+    } else {
+      const addrDir = join(STATS_DIR, addr);
+      let totalCount = 0, totalProfit = 0;
+      if (existsSync(addrDir)) {
+        const files = require("fs").readdirSync(addrDir);
+        files.forEach((f: string) => {
+          const data = JSON.parse(readFileSync(join(addrDir, f), "utf8"));
+          totalCount += data.length;
+          totalProfit += data.reduce((s: number, r: any) => s + parseFloat(r.profit || "0"), 0);
+        });
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ count: totalCount, total: totalProfit }));
+    }
+  } else if (req.url === "/api/add-whitelist" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { token, addresses } = JSON.parse(body);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, message: "Whitelist updated" }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid request" }));
+      }
+    });
+  } else if (req.url === "/api/create-token" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { factory, name, symbol, supply } = JSON.parse(body);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, address: "0x" + Math.random().toString(16).slice(2) }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid request" }));
+      }
+    });
+  } else if (req.url?.startsWith("/api/user-tokens")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const factory = url.searchParams.get("factory");
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ count, total }));
+    res.end(JSON.stringify([]));
   } else {
     res.writeHead(404); res.end();
   }

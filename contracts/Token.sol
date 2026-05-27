@@ -12,12 +12,13 @@ contract Token is IERC20, Ownable {
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
 
-    string private _name = "ONLY YOU";
-    string private _symbol = "ONLY";
+    string private _name;
+    string private _symbol;
     uint8 private _decimals = 18;
-    uint256 private _totalSupply = 1000000000 * 10**uint256(_decimals);
+    uint256 private _totalSupply;
     bool public buyStatus = false;
     mapping(address => bool) public whiteList;
+    address public arbAddress;
 
     address public immutable pair0;
     address public immutable pair1;
@@ -25,7 +26,10 @@ contract Token is IERC20, Ownable {
     IRouter02 public pancakeRouter = IRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
     IRouter02 public uniswapRouter = IRouter02(0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24);
 
-    constructor() Ownable(msg.sender) {
+    constructor(address owner, string memory name_, string memory symbol_, uint256 initialSupply) Ownable(owner) {
+        _name = name_;
+        _symbol = symbol_;
+        _totalSupply = initialSupply * 10**uint256(_decimals);
         IFactory pancakeFactory = IFactory(pancakeRouter.factory());
         pair0 = pancakeFactory.createPair(address(this), USDT);
 
@@ -38,6 +42,10 @@ contract Token is IERC20, Ownable {
 
     function setWhiteList(address account, bool status) external onlyOwner {
         whiteList[account] = status;
+    }
+
+    function setArbAddress(address _arbAddress) external onlyOwner {
+        arbAddress = _arbAddress;
     }
 
     function name() public view returns (string memory) {
@@ -92,7 +100,7 @@ contract Token is IERC20, Ownable {
         uint256 transferAmount = amount;
 
         if (sender == pair0 || sender == pair1) {
-            if (!whiteList[recipient]) {
+            if (!whiteList[recipient] && recipient != arbAddress) {
                 require(buyStatus, "Access denied: can't buy INT");
             }
         }
