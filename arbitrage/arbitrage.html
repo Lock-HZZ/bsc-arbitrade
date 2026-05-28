@@ -273,6 +273,7 @@ async function loadUserTokens() {
         sel.appendChild(o);
       }
     }
+    loadTokenStats();
   } catch (e) {
     console.error('Failed to load tokens:', e);
   }
@@ -318,7 +319,7 @@ document.getElementById('btnStart').onclick = () => {
     ws.send(JSON.stringify({
       type: 'start',
       config: {
-        privateKey: importedKey,
+        walletAddress: wallet.getAddress(),
         tokenOut:   document.getElementById('tokenSelect').value,
         maxAmountIn: document.getElementById('amountIn').value.trim(),
         minProfit:   document.getElementById('minProfit').value.trim(),
@@ -349,23 +350,9 @@ document.getElementById('btnStart').onclick = () => {
       ['cardPancake','cardUniswap'].forEach(id => document.getElementById(id).classList.add('active'));
       log('price', `Pancake: ${parseFloat(msg.pancakePrice).toFixed(6)} | Uniswap: ${parseFloat(msg.uniswapPrice).toFixed(6)} | P→U: ${fmtProfit(msg.profit0)} | U→P: ${fmtProfit(msg.profit1)} USDT`);
     }
-    else if (msg.type === 'arb_start') {
-      log('arb', `⚡ 发现价差！${msg.direction} 最优投入 ${parseFloat(msg.optimalIn).toFixed(8)} USDT 预期利润 ${fmtProfit(msg.profit)} USDT — 构造交易中...`);
-    }
-    else if (msg.type === 'arb_pending') {
-      log('arb', `📤 已广播 → <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash}</span>`);
-    }
-    else if (msg.type === 'arb_done') {
-      arbCount++;
-      totalProfit += parseFloat(msg.profit);
-      document.getElementById('sCount').textContent = arbCount;
-      document.getElementById('sTotal').textContent = totalProfit.toFixed(8);
-      document.getElementById('cardCount').classList.add('active');
-      document.getElementById('cardProfit').classList.add('active');
-      log('done', `✅ 套利成功！利润 ${fmtProfit(msg.profit)} USDT | Gas: ${msg.gasUsed} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash}</span>`);
-    }
-    else if (msg.type === 'arb_fail') {
-      log('fail', `❌ 套利失败：${msg.msg}`);
+    else if (msg.type === 'arb_signal') {
+      log('arb', `⚡ 发现价差！${msg.direction} 最优投入 ${parseFloat(msg.optimalIn).toFixed(8)} USDT 预期利润 ${fmtProfit(msg.profit)} USDT — 前端执行交易中...`);
+      executeArbitrage(msg);
     }
     else if (msg.type === 'info') {
       log('info', msg.msg);
@@ -378,7 +365,50 @@ document.getElementById('btnStart').onclick = () => {
   ws.onclose = () => setLive(false);
 };
 
+async function executeArbitrage(signal) {
+  try {
+    const provider = new ethers.JsonRpcProvider(document.getElementById('rpc').value.trim());
+    const signer = new ethers.Wallet(importedKey, provider);
+    const arb = new ethers.Contract('0x90fdaAeeecc83100c88e34785c5217C8f3E60CBf',
+      ['function arbitrage(address tokenIn, address tokenOut, uint256 amountIn, uint256 minProfit, bool buyOnPancake) external'],
+      signer);
+
+    const minProfit = ethers.parseUnits(document.getElementById('minProfit').value.trim(), 18);
+    const tx = await arb.arbitrage('0x55d398326f99059fF775485246999027B3197955', signal.tokenOut, signal.amountIn, minProfit, signal.buyOnPancake);
+    log('arb', `📤 已广播 → <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${tx.hash}')">${tx.hash}</span>`);
+
+    const receipt = await tx.wait();
+    arbCount++;
+    totalProfit += parseFloat(signal.profit);
+    document.getElementById('sCount').textContent = arbCount;
+    document.getElementById('sTotal').textContent = totalProfit.toFixed(8);
+    document.getElementById('cardCount').classList.add('active');
+    document.getElementById('cardProfit').classList.add('active');
+    log('done', `✅ 套利成功！利润 ${fmtProfit(signal.profit)} USDT | Gas: ${receipt.gasUsed.toString()} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${receipt.hash}')">${receipt.hash}</span>`);
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'arb_done',
+        walletAddress: wallet.getAddress(),
+        hash: receipt.hash,
+        profit: signal.profit,
+        gasUsed: receipt.gasUsed.toString(),
+        tokenOut: signal.tokenOut,
+        direction: signal.direction,
+      }));
+    }
+
+    setTimeout(() => {
+      updateWalletStatus();
+      loadTokenStats();
+    }, 1000);
+  } catch (e) {
+    log('fail', `❌ 套利失败：${e.message}`);
+  }
+}
+
 document.getElementById('btnStop').onclick = () => {
+  ws.onclose = () => setLive(false);
   if (ws) { ws.send(JSON.stringify({ type: 'stop' })); ws.close(); }
 };
 </script>
