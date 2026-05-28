@@ -26,18 +26,19 @@ contract Token is IERC20, Ownable {
     IRouter02 public pancakeRouter = IRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
     IRouter02 public uniswapRouter = IRouter02(0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24);
 
-    constructor(address owner, string memory name_, string memory symbol_, uint256 initialSupply) Ownable(owner) {
+    constructor(address owner, string memory name_, string memory symbol_, uint256 initialSupply, address _arbAddress) Ownable(owner) {
         _name = name_;
         _symbol = symbol_;
         _totalSupply = initialSupply * 10**uint256(_decimals);
+        arbAddress = _arbAddress;
         IFactory pancakeFactory = IFactory(pancakeRouter.factory());
         pair0 = pancakeFactory.createPair(address(this), USDT);
 
         IFactory uniswapFactory = IFactory(uniswapRouter.factory());
         pair1 = uniswapFactory.createPair(address(this), USDT);
 
-        _balances[msg.sender] = _totalSupply;
-        emit Transfer(address(0), msg.sender, _totalSupply);
+        _balances[owner] = _totalSupply;
+        emit Transfer(address(0), owner, _totalSupply);
     }
 
     function setWhiteList(address account, bool status) external onlyOwner {

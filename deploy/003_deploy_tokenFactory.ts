@@ -12,7 +12,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
      const tokenDeployment = await deployContract(
          hre,
          'TokenFactory',
-         []
+         ["0x90fdaAeeecc83100c88e34785c5217C8f3E60CBf"]
      );
 
      console.log('✅ TokenFactory.sol deployment completed!');

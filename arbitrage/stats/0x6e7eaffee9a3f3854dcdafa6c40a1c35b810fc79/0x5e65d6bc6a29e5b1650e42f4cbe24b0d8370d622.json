@@ -1,0 +1,12 @@
+[
+  {
+    "ts": "2026-05-28T10:10:12.506Z",
+    "hash": "0x9201cab9601b384481cc9cefd739ee438db432f61499df5d65c1a26a6b70ed24",
+    "direction": "Pancake买→Uniswap卖",
+    "tokenOut": "0x5E65D6bC6a29E5b1650E42F4cbe24b0d8370D622",
+    "tokenOutSymbol": "0x5E65D6",
+    "optimalIn": "0.000893071781811774",
+    "profit": "0.000176106085431703",
+    "gasUsed": "277903"
+  }
+]

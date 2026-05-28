@@ -5,7 +5,7 @@ import "./interfaces/IRouter02.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IToken {
-    function whiteList(address account) external view returns (bool);
+    function owner() external view returns (address);
 }
 
 contract Arbitrage {
@@ -22,8 +22,8 @@ contract Arbitrage {
         _;
     }
 
-    modifier onlyWhitelisted(address tokenOut) {
-        require(IToken(tokenOut).whiteList(msg.sender), "not whitelisted");
+    modifier onlyTokenOwner(address tokenOut) {
+        require(IToken(tokenOut).owner() == msg.sender, "not token owner");
         _;
     }
 
@@ -38,7 +38,7 @@ contract Arbitrage {
         uint256 amountIn,
         uint256 minProfit,
         bool buyOnPancake
-    ) external onlyWhitelisted(tokenOut) {
+    ) external onlyTokenOwner(tokenOut) {
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
         (IRouter02 buyRouter, IRouter02 sellRouter) = buyOnPancake

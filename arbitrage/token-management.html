@@ -43,7 +43,7 @@
       color: var(--muted); transition: border-color .2s, color .2s;
     }
     .btn-back:hover { border-color: var(--accent); color: var(--accent); }
-    .token-list { display: flex; flex-direction: column; gap: 8px; }
+    .token-list { display: flex; flex-direction: column; gap: 8px; flex: 1; overflow-y: auto; min-height: 0; }
     .token-item {
       background: #0a0e1c; border: 1px solid var(--border); border-radius: 6px;
       padding: 12px; font-size: 12px; cursor: pointer; transition: all .2s;
@@ -52,7 +52,7 @@
     .token-item.active { border-color: var(--accent); background: rgba(0,245,196,.1); }
     .section {
       background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-      padding: 20px; position: relative; overflow: hidden;
+      padding: 20px; position: relative;
     }
     .section::before {
       content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
@@ -123,8 +123,9 @@
   <script src="wallet.js"></script>
   <script src="wallet-modal.js"></script>
   <script>
-    const FACTORY_ADDR = '0x899f9F9B407c98c51E597e1fdce62d2383Bb2924';
+    const FACTORY_ADDR = '0xDa2523c0f830d0809E0c2Af02F00FfD3117830e3';
     const FACTORY_ABI = ['function createToken(string name, string symbol, uint256 initialSupply) external returns (address)', 'function getUserTokens(address user) external view returns (address[])'];
+    const TOKEN_ABI = ['function name() external view returns (string)', 'function symbol() external view returns (string)'];
     const RPC = 'https://bsc.blockrazor.xyz';
     let selectedToken = null;
 
@@ -149,7 +150,19 @@
         if (!tokens.length) {
           list.innerHTML = '<div style="font-size: 12px; color: var(--muted); text-align: center; padding: 20px;">未找到代币</div>';
         } else {
-          list.innerHTML = tokens.map((t, i) => `<div class="token-item" onclick="selectToken('${t}', ${i})"><div style="word-break: break-all;">${t.slice(0, 10)}...</div></div>`).join('');
+          const items = await Promise.all(tokens.map(async (t, i) => {
+            try {
+              const token = new ethers.Contract(t, TOKEN_ABI, provider);
+              const name = await token.name();
+              return `<div class="token-item" onclick="selectToken('${t}', ${i})" ${i === 0 ? 'style="border-color: var(--accent); background: rgba(0,245,196,.1);"' : ''}><div style="word-break: break-all;">${name}</div></div>`;
+            } catch {
+              return `<div class="token-item" onclick="selectToken('${t}', ${i})" ${i === 0 ? 'style="border-color: var(--accent); background: rgba(0,245,196,.1);"' : ''}><div style="word-break: break-all;">${t.slice(0, 10)}...</div></div>`;
+            }
+          }));
+          list.innerHTML = items.join('');
+          if (tokens.length > 0) {
+            selectToken(tokens[0], 0);
+          }
         }
         log(`✓ 已加载 ${tokens.length} 个代币`);
       } catch (error) {
@@ -184,8 +197,8 @@
         const provider = new ethers.JsonRpcProvider(RPC);
         const signer = new ethers.Wallet(wallet.getPrivateKey(), provider);
         const factory = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, signer);
-        const tx = await factory.createToken(name, symbol, ethers.parseUnits(supply, 18));
-        log(`📤 交易已广播: ${tx.hash.slice(0,22)}...`);
+        const tx = await factory.createToken(name, symbol, supply);
+        log(`📤 交易已广播: ${tx.hash}`);
         await tx.wait();
         log(`✓ 代币已创建`);
         document.getElementById('tokenName').value = '';
@@ -209,12 +222,24 @@
       }
       try {
         log(`添加 ${addrs.length} 个地址到白名单...`);
+        const provider = new ethers.JsonRpcProvider(RPC);
+        const signer = new ethers.Wallet(wallet.getPrivateKey(), provider);
+        const TOKEN_ABI_WRITE = ['function setWhiteList(address account, bool status) external'];
+        const token = new ethers.Contract(selectedToken, TOKEN_ABI_WRITE, signer);
+        for (const addr of addrs) {
+          const tx = await token.setWhiteList(addr, true);
+          await tx.wait();
+        }
         log(`✓ 白名单已更新`);
         document.getElementById('whitelistAddrs').value = '';
       } catch (error) {
         log(`✗ 错误: ${error.message}`);
       }
     };
+
+    if (wallet.isConnected()) {
+      loadMyTokens();
+    }
   </script>
 </body>
 </html>

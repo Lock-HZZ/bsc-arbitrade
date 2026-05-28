@@ -162,12 +162,12 @@ body { background: var(--bg); color: var(--text); font-family: 'Courier New', mo
       <div class="card" id="cardCount">
         <div class="c-label">套利次数</div>
         <div class="c-val" id="sCount">0</div>
-        <div class="c-sub" id="sCountSub">本次会话</div>
+        <div class="c-sub">累计</div>
       </div>
       <div class="card" id="cardProfit">
         <div class="c-label">累计利润</div>
         <div class="c-val green" id="sTotal">0.00000000</div>
-        <div class="c-sub" id="sTotalSub">USDT</div>
+        <div class="c-sub">USDT</div>
       </div>
       <div class="card" id="cardTokenCount">
         <div class="c-label">代币套利次数</div>
@@ -250,25 +250,37 @@ updateWalletStatus();
 async function loadUserTokens() {
   if (!wallet.isConnected()) return;
   try {
-    const FACTORY_ADDR = '0x899f9F9B407c98c51E597e1fdce62d2383Bb2924';
+    const FACTORY_ADDR = '0xDa2523c0f830d0809E0c2Af02F00FfD3117830e3';
     const FACTORY_ABI = ['function getUserTokens(address user) external view returns (address[])'];
+    const TOKEN_ABI = ['function name() external view returns (string)'];
     const provider = new ethers.JsonRpcProvider('https://bsc.blockrazor.xyz');
     const factory = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, provider);
     const tokens = await factory.getUserTokens(wallet.getAddress());
     const sel = document.getElementById('tokenSelect');
     sel.innerHTML = '';
-    tokens.forEach(t => {
-      const o = document.createElement('option');
-      o.value = t;
-      o.textContent = t.slice(0, 10) + '...';
-      sel.appendChild(o);
-    });
+    for (const t of tokens) {
+      try {
+        const token = new ethers.Contract(t, TOKEN_ABI, provider);
+        const name = await token.name();
+        const o = document.createElement('option');
+        o.value = t;
+        o.textContent = name;
+        sel.appendChild(o);
+      } catch {
+        const o = document.createElement('option');
+        o.value = t;
+        o.textContent = t.slice(0, 10) + '...';
+        sel.appendChild(o);
+      }
+    }
   } catch (e) {
     console.error('Failed to load tokens:', e);
   }
 }
 
 loadUserTokens();
+
+document.getElementById('tokenSelect').addEventListener('change', loadTokenStats);
 
 function setLive(on) {
   document.getElementById('dot').className = 'dot' + (on ? ' live' : '');
@@ -341,7 +353,7 @@ document.getElementById('btnStart').onclick = () => {
       log('arb', `⚡ 发现价差！${msg.direction} 最优投入 ${parseFloat(msg.optimalIn).toFixed(8)} USDT 预期利润 ${fmtProfit(msg.profit)} USDT — 构造交易中...`);
     }
     else if (msg.type === 'arb_pending') {
-      log('arb', `📤 已广播 → <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash.slice(0,22)}...</span>`);
+      log('arb', `📤 已广播 → <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash}</span>`);
     }
     else if (msg.type === 'arb_done') {
       arbCount++;
@@ -350,7 +362,7 @@ document.getElementById('btnStart').onclick = () => {
       document.getElementById('sTotal').textContent = totalProfit.toFixed(8);
       document.getElementById('cardCount').classList.add('active');
       document.getElementById('cardProfit').classList.add('active');
-      log('done', `✅ 套利成功！利润 ${fmtProfit(msg.profit)} USDT | Gas: ${msg.gasUsed} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash.slice(0,22)}...</span>`);
+      log('done', `✅ 套利成功！利润 ${fmtProfit(msg.profit)} USDT | Gas: ${msg.gasUsed} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${msg.hash}')">${msg.hash}</span>`);
     }
     else if (msg.type === 'arb_fail') {
       log('fail', `❌ 套利失败：${msg.msg}`);
