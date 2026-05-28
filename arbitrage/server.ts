@@ -25,11 +25,11 @@ const ARB_CONTRACT = '0x90fdaAeeecc83100c88e34785c5217C8f3E60CBf';
 
 interface Config {
   rpc: string;
-  privateKey: string;
   tokenOut: string;
   maxAmountIn: string;
   minProfit: string;
   pollMs: number;
+  walletAddress: string;
 }
 
 const PAIR_ABI = [
@@ -114,9 +114,7 @@ async function runMonitor(ws: WebSocket, cfg: Config) {
   sessions.set(ws, { stop: () => { running = false; } });
 
   const provider = new ethers.JsonRpcProvider(cfg.rpc);
-  const signer = new ethers.Wallet(cfg.privateKey, provider);
-  const arb = new ethers.Contract(ARB_CONTRACT, ARBITRAGE_ABI, signer);
-  const usdtContract = new ethers.Contract(USDT, ERC20_ABI, signer);
+  const usdtContract = new ethers.Contract(USDT, ERC20_ABI, provider);
   const tokenOutContract = new ethers.Contract(cfg.tokenOut, ERC20_ABI, provider);
   const pancakeFactory = new ethers.Contract(PANCAKE_FACTORY, FACTORY_ABI, provider);
   const uniswapFactory = new ethers.Contract(UNISWAP_FACTORY, FACTORY_ABI, provider);
@@ -133,17 +131,8 @@ async function runMonitor(ws: WebSocket, cfg: Config) {
 
   broadcast(ws, "info", { msg: `监控 USDT → ${tokenOutSymbol}，每 ${cfg.pollMs}ms 轮询，最大投入 ${cfg.maxAmountIn} USDT` });
 
-  const walletAddress = await signer.getAddress();
-  const allowance: bigint = await usdtContract.allowance(walletAddress, ARB_CONTRACT);
-  if (allowance < maxAmountIn) {
-    broadcast(ws, "info", { msg: "正在授权 USDT..." });
-    await (await usdtContract.approve(ARB_CONTRACT, ethers.MaxUint256)).wait();
-    broadcast(ws, "info", { msg: "授权完成" });
-  }
-
   while (running) {
     try {
-      // 并行读取两个 pair 的 reserves
       const [pRes, uRes] = await Promise.all([
         getPairReserves(pancakeFactory, provider, USDT, cfg.tokenOut),
         getPairReserves(uniswapFactory, provider, USDT, cfg.tokenOut),
@@ -155,18 +144,13 @@ async function runMonitor(ws: WebSocket, cfg: Config) {
         continue;
       }
 
-      // 用 1 USDT 探测价格展示（复用 reserves 计算，无需额外 RPC）
       const probe = ethers.parseUnits("1", usdtDecimals);
       const pancakePrice1 = (probe * 997n * pRes.rB) / (pRes.rA * 1000n + probe * 997n);
       const uniswapPrice1 = (probe * 997n * uRes.rB) / (uRes.rA * 1000n + probe * 997n);
 
-      // 两个方向解析最优投入量
-      // 方向0: Pancake买(USDT->TOKEN) -> Uniswap卖(TOKEN->USDT)
       const opt0 = calcOptimalAmountIn(pRes.rA, pRes.rB, uRes.rB, uRes.rA, maxAmountIn);
-      // 方向1: Uniswap买(USDT->TOKEN) -> Pancake卖(TOKEN->USDT)
       const opt1 = calcOptimalAmountIn(uRes.rA, uRes.rB, pRes.rB, pRes.rA, maxAmountIn);
 
-      // 用 getAmountsOut 验证实际利润（含手续费精确值）
       let profit0 = 0n, profit1 = 0n;
       if (opt0 > 0n) {
         try {
@@ -207,34 +191,14 @@ async function runMonitor(ws: WebSocket, cfg: Config) {
           continue;
         }
         const direction = buyOnPancake ? "Pancake买→Uniswap卖" : "Uniswap买→Pancake卖";
-        broadcast(ws, "arb_start", {
+        broadcast(ws, "arb_signal", {
           direction,
           profit: ethers.formatUnits(profit, usdtDecimals),
           optimalIn: ethers.formatUnits(optimalIn, usdtDecimals),
+          amountIn: optimalIn.toString(),
+          buyOnPancake,
+          tokenOut: cfg.tokenOut,
         });
-        try {
-          const tx = await arb.arbitrage(USDT, cfg.tokenOut, optimalIn, minProfit, buyOnPancake);
-          broadcast(ws, "arb_pending", { hash: tx.hash });
-          const receipt = await tx.wait();
-          const profitStr = ethers.formatUnits(profit, usdtDecimals);
-          broadcast(ws, "arb_done", {
-            hash: receipt.hash,
-            profit: profitStr,
-            gasUsed: receipt.gasUsed.toString(),
-          });
-          saveRecord(walletAddress, cfg.tokenOut, {
-            ts: new Date().toISOString(),
-            hash: receipt.hash,
-            direction,
-            tokenOut: cfg.tokenOut,
-            tokenOutSymbol,
-            optimalIn: ethers.formatUnits(optimalIn, usdtDecimals),
-            profit: profitStr,
-            gasUsed: receipt.gasUsed.toString(),
-          });
-        } catch (e: any) {
-          broadcast(ws, "arb_fail", { msg: e.shortMessage || e.message });
-        }
       }
     } catch (e: any) {
       broadcast(ws, "error", { msg: e.shortMessage || e.message });
@@ -345,6 +309,16 @@ wss.on("connection", (ws) => {
       sessions.get(ws)?.stop();
       sessions.delete(ws);
       broadcast(ws, "info", { msg: "已停止监控" });
+    }
+    if (msg.type === "arb_done") {
+      saveRecord(msg.config?.walletAddress || msg.walletAddress || "unknown", msg.tokenOut, {
+        ts: new Date().toISOString(),
+        hash: msg.hash,
+        direction: msg.direction,
+        tokenOut: msg.tokenOut,
+        profit: msg.profit,
+        gasUsed: msg.gasUsed,
+      });
     }
   });
   ws.on("close", () => { sessions.get(ws)?.stop(); sessions.delete(ws); });
