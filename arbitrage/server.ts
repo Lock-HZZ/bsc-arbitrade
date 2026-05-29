@@ -105,108 +105,6 @@ function saveRecord(address: string, tokenOut: string, record: object) {
   writeFileSync(file, JSON.stringify(history, null, 2));
 }
 
-function broadcast(ws: WebSocket, type: string, data: object) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, ...data }));
-}
-
-async function runMonitor(ws: WebSocket, cfg: Config) {
-  let running = true;
-  sessions.set(ws, { stop: () => { running = false; } });
-
-  const provider = new ethers.JsonRpcProvider(cfg.rpc);
-  const usdtContract = new ethers.Contract(USDT, ERC20_ABI, provider);
-  const tokenOutContract = new ethers.Contract(cfg.tokenOut, ERC20_ABI, provider);
-  const pancakeFactory = new ethers.Contract(PANCAKE_FACTORY, FACTORY_ABI, provider);
-  const uniswapFactory = new ethers.Contract(UNISWAP_FACTORY, FACTORY_ABI, provider);
-  const pancakeRouter = new ethers.Contract(PANCAKE_ROUTER, ROUTER_ABI, provider);
-
-  const [usdtDecimals, tokenOutDecimals] = await Promise.all([
-    usdtContract.decimals(),
-    tokenOutContract.decimals(),
-  ]);
-
-  const tokenOutSymbol = TOKENS.find(t => t.address.toLowerCase() === cfg.tokenOut.toLowerCase())?.symbol ?? cfg.tokenOut.slice(0, 8);
-  const maxAmountIn = ethers.parseUnits(cfg.maxAmountIn, usdtDecimals);
-  const minProfit = ethers.parseUnits(cfg.minProfit, usdtDecimals);
-
-  broadcast(ws, "info", { msg: `监控 USDT → ${tokenOutSymbol}，每 ${cfg.pollMs}ms 轮询，最大投入 ${cfg.maxAmountIn} USDT` });
-
-  while (running) {
-    try {
-      const [pRes, uRes] = await Promise.all([
-        getPairReserves(pancakeFactory, provider, USDT, cfg.tokenOut),
-        getPairReserves(uniswapFactory, provider, USDT, cfg.tokenOut),
-      ]);
-
-      if (!pRes || !uRes) {
-        broadcast(ws, "error", { msg: "pair 不存在" });
-        await new Promise((r) => setTimeout(r, cfg.pollMs));
-        continue;
-      }
-
-      const probe = ethers.parseUnits("1", usdtDecimals);
-      const pancakePrice1 = (probe * 997n * pRes.rB) / (pRes.rA * 1000n + probe * 997n);
-      const uniswapPrice1 = (probe * 997n * uRes.rB) / (uRes.rA * 1000n + probe * 997n);
-
-      const opt0 = calcOptimalAmountIn(pRes.rA, pRes.rB, uRes.rB, uRes.rA, maxAmountIn);
-      const opt1 = calcOptimalAmountIn(uRes.rA, uRes.rB, pRes.rB, pRes.rA, maxAmountIn);
-
-      let profit0 = 0n, profit1 = 0n;
-      if (opt0 > 0n) {
-        try {
-          const mid = await pancakeRouter.getAmountsOut(opt0, [USDT, cfg.tokenOut]);
-          const uniswapRouter = new ethers.Contract(UNISWAP_ROUTER, ROUTER_ABI, provider);
-          const out = await uniswapRouter.getAmountsOut(mid[1], [cfg.tokenOut, USDT]);
-          profit0 = out[1] - opt0;
-        } catch {}
-      }
-      if (opt1 > 0n) {
-        try {
-          const uniswapRouter = new ethers.Contract(UNISWAP_ROUTER, ROUTER_ABI, provider);
-          const mid = await uniswapRouter.getAmountsOut(opt1, [USDT, cfg.tokenOut]);
-          const out = await pancakeRouter.getAmountsOut(mid[1], [cfg.tokenOut, USDT]);
-          profit1 = out[1] - opt1;
-        } catch {}
-      }
-
-      broadcast(ws, "price", {
-        pancakePrice: ethers.formatUnits(pancakePrice1, tokenOutDecimals),
-        uniswapPrice: ethers.formatUnits(uniswapPrice1, tokenOutDecimals),
-        profit0: ethers.formatUnits(profit0, usdtDecimals),
-        profit1: ethers.formatUnits(profit1, usdtDecimals),
-        optimalIn: profit0 > profit1
-          ? ethers.formatUnits(opt0, usdtDecimals)
-          : ethers.formatUnits(opt1, usdtDecimals),
-        tokenOutSymbol,
-        ts: Date.now(),
-      });
-
-      const hasProfitable = profit0 > minProfit || profit1 > minProfit;
-      if (hasProfitable) {
-        const buyOnPancake = profit0 >= profit1;
-        const optimalIn = buyOnPancake ? opt0 : opt1;
-        const profit = buyOnPancake ? profit0 : profit1;
-        if (profit <= minProfit) {
-          await new Promise((r) => setTimeout(r, cfg.pollMs));
-          continue;
-        }
-        const direction = buyOnPancake ? "Pancake买→Uniswap卖" : "Uniswap买→Pancake卖";
-        broadcast(ws, "arb_signal", {
-          direction,
-          profit: ethers.formatUnits(profit, usdtDecimals),
-          optimalIn: ethers.formatUnits(optimalIn, usdtDecimals),
-          amountIn: optimalIn.toString(),
-          buyOnPancake,
-          tokenOut: cfg.tokenOut,
-        });
-      }
-    } catch (e: any) {
-      broadcast(ws, "error", { msg: e.shortMessage || e.message });
-    }
-    await new Promise((r) => setTimeout(r, cfg.pollMs));
-  }
-}
-
 const httpServer = createServer((req, res) => {
   if (req.url === "/" || req.url === "/index.html") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -253,9 +151,13 @@ const httpServer = createServer((req, res) => {
       if (existsSync(addrDir)) {
         const files = require("fs").readdirSync(addrDir);
         files.forEach((f: string) => {
-          const data = JSON.parse(readFileSync(join(addrDir, f), "utf8"));
-          totalCount += data.length;
-          totalProfit += data.reduce((s: number, r: any) => s + parseFloat(r.profit || "0"), 0);
+          try {
+            const data = JSON.parse(readFileSync(join(addrDir, f), "utf8"));
+            totalCount += data.length;
+            totalProfit += data.reduce((s: number, r: any) => s + parseFloat(r.profit || "0"), 0);
+          } catch (e) {
+            // 忽略格式错误的文件
+          }
         });
       }
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -292,36 +194,23 @@ const httpServer = createServer((req, res) => {
     const factory = url.searchParams.get("factory");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify([]));
+  } else if (req.url === "/api/save-record" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { address, tokenOut, record } = JSON.parse(body);
+        saveRecord(address, tokenOut, record);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid request" }));
+      }
+    });
   } else {
     res.writeHead(404); res.end();
   }
-});
-
-const wss = new WebSocketServer({ server: httpServer });
-wss.on("connection", (ws) => {
-  ws.on("message", async (raw) => {
-    const msg = JSON.parse(raw.toString());
-    if (msg.type === "start") {
-      sessions.get(ws)?.stop();
-      runMonitor(ws, msg.config).catch((e) => broadcast(ws, "error", { msg: e.message }));
-    }
-    if (msg.type === "stop") {
-      sessions.get(ws)?.stop();
-      sessions.delete(ws);
-      broadcast(ws, "info", { msg: "已停止监控" });
-    }
-    if (msg.type === "arb_done") {
-      saveRecord(msg.config?.walletAddress || msg.walletAddress || "unknown", msg.tokenOut, {
-        ts: new Date().toISOString(),
-        hash: msg.hash,
-        direction: msg.direction,
-        tokenOut: msg.tokenOut,
-        profit: msg.profit,
-        gasUsed: msg.gasUsed,
-      });
-    }
-  });
-  ws.on("close", () => { sessions.get(ws)?.stop(); sessions.delete(ws); });
 });
 
 httpServer.listen(PORT, () => console.log(`http://localhost:${PORT}`));

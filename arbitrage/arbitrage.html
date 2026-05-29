@@ -106,7 +106,6 @@ body { background: var(--bg); color: var(--text); font-family: 'Courier New', mo
 <body>
 <div class="layout">
 
-  <!-- sidebar -->
   <aside class="sidebar">
     <div class="logo">ARB<span>BOT</span></div>
 
@@ -140,13 +139,11 @@ body { background: var(--bg); color: var(--text); font-family: 'Courier New', mo
     <button class="btn-stop" onclick="location.href='token-management.html'" style="border-color: var(--muted); color: var(--muted); margin-top: auto;">→ 创建代币</button>
   </aside>
 
-  <!-- topbar -->
   <header class="topbar">
     <div class="dot" id="dot"></div>
     <span class="status-text" id="statusText">未连接</span>
   </header>
 
-  <!-- main -->
   <main class="main">
     <div class="cards">
       <div class="card" id="cardPancake">
@@ -211,7 +208,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Courier New', mo
 <script src="wallet.js"></script>
 <script src="wallet-modal.js"></script>
 <script>
-let ws, arbCount = 0, totalProfit = 0, importedKey = '';
+let arbCount = 0, totalProfit = 0, importedKey = '', monitorInterval = null;
 
 function updateWalletStatus() {
   if (wallet.isConnected()) {
@@ -311,61 +308,130 @@ function setProfitEl(id, val) {
   el.style.color = n > 0 ? 'var(--accent)' : 'var(--red)';
 }
 
-document.getElementById('btnStart').onclick = () => {
-  if (ws) ws.close();
-  ws = new WebSocket(`ws://${location.host}`);
+function sqrt(n) {
+  if (n < 0n) return 0n;
+  if (n < 4n) return n === 0n ? 0n : 1n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) { x = y; y = (x + n / x) / 2n; }
+  return x;
+}
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: 'start',
-      config: {
-        walletAddress: wallet.getAddress(),
-        tokenOut:   document.getElementById('tokenSelect').value,
-        maxAmountIn: document.getElementById('amountIn').value.trim(),
-        minProfit:   document.getElementById('minProfit').value.trim(),
-        pollMs:     3000,
-        rpc:        document.getElementById('rpc').value.trim(),
+function calcOptimalAmountIn(rIn0, rOut0, rIn1, rOut1, maxIn) {
+  const FEE = 997n;
+  const BASE = 1000n;
+  const a = rIn0 * rOut0 * rIn1 * rOut1 * FEE * FEE;
+  const sqrtA = sqrt(a);
+  const numerator = sqrtA - rIn0 * rIn1 * BASE;
+  const denominator = rIn1 * BASE + rOut0 * FEE;
+  if (numerator <= 0n || denominator <= 0n) return 0n;
+  const opt = numerator / denominator;
+  return opt > maxIn ? maxIn : opt;
+}
+
+document.getElementById('btnStart').onclick = async () => {
+  if (!wallet.isConnected()) {
+    alert('请先连接钱包');
+    return;
+  }
+
+  setLive(true);
+  // 不重置计数器，继续累加
+  // arbCount = 0; totalProfit = 0;
+  // document.getElementById('sCount').textContent = '0';
+  // document.getElementById('sTotal').textContent = '0.00000000';
+
+  const tokenOut = document.getElementById('tokenSelect').value;
+  const maxAmountIn = document.getElementById('amountIn').value.trim();
+  const minProfit = document.getElementById('minProfit').value.trim();
+  const rpc = document.getElementById('rpc').value.trim();
+
+  const provider = new ethers.JsonRpcProvider(rpc);
+  const PANCAKE_FACTORY = '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73';
+  const UNISWAP_FACTORY = '0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6';
+  const USDT = '0x55d398326f99059fF775485246999027B3197955';
+  const PANCAKE_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
+  const UNISWAP_ROUTER = '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24';
+
+  const PAIR_ABI = ['function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32)', 'function token0() external view returns (address)'];
+  const FACTORY_ABI = ['function getPair(address, address) external view returns (address)'];
+  const ROUTER_ABI = ['function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)'];
+  const ERC20_ABI = ['function decimals() external view returns (uint8)'];
+
+  const pancakeFactory = new ethers.Contract(PANCAKE_FACTORY, FACTORY_ABI, provider);
+  const uniswapFactory = new ethers.Contract(UNISWAP_FACTORY, FACTORY_ABI, provider);
+  const pancakeRouter = new ethers.Contract(PANCAKE_ROUTER, ROUTER_ABI, provider);
+  const uniswapRouter = new ethers.Contract(UNISWAP_ROUTER, ROUTER_ABI, provider);
+
+  const usdtContract = new ethers.Contract(USDT, ERC20_ABI, provider);
+  const tokenOutContract = new ethers.Contract(tokenOut, ERC20_ABI, provider);
+  const [usdtDecimals, tokenOutDecimals] = await Promise.all([usdtContract.decimals(), tokenOutContract.decimals()]);
+
+  const maxAmountInBig = ethers.parseUnits(maxAmountIn, usdtDecimals);
+  const minProfitBig = ethers.parseUnits(minProfit, usdtDecimals);
+
+  const getPairReserves = async (factory, tokenA, tokenB) => {
+    const pairAddr = await factory.getPair(tokenA, tokenB);
+    if (pairAddr === ethers.ZeroAddress) return null;
+    const pair = new ethers.Contract(pairAddr, PAIR_ABI, provider);
+    const [r0, r1] = await pair.getReserves();
+    const token0 = await pair.token0();
+    return token0.toLowerCase() === tokenA.toLowerCase() ? { rA: r0, rB: r1 } : { rA: r1, rB: r0 };
+  };
+
+  monitorInterval = setInterval(async () => {
+    try {
+      const [pRes, uRes] = await Promise.all([
+        getPairReserves(pancakeFactory, USDT, tokenOut),
+        getPairReserves(uniswapFactory, USDT, tokenOut),
+      ]);
+
+      if (!pRes || !uRes) return;
+
+      const probe = ethers.parseUnits('1', usdtDecimals);
+      const pancakePrice = (probe * 997n * pRes.rB) / (pRes.rA * 1000n + probe * 997n);
+      const uniswapPrice = (probe * 997n * uRes.rB) / (uRes.rA * 1000n + probe * 997n);
+
+      document.getElementById('sPancake').textContent = ethers.formatUnits(pancakePrice, tokenOutDecimals).slice(0, 10);
+      document.getElementById('sUniswap').textContent = ethers.formatUnits(uniswapPrice, tokenOutDecimals).slice(0, 10);
+
+      const opt0 = calcOptimalAmountIn(pRes.rA, pRes.rB, uRes.rB, uRes.rA, maxAmountInBig);
+      const opt1 = calcOptimalAmountIn(uRes.rA, uRes.rB, pRes.rB, pRes.rA, maxAmountInBig);
+
+      let profit0 = 0n, profit1 = 0n;
+      if (opt0 > 0n) {
+        const mid0 = await pancakeRouter.getAmountsOut(opt0, [USDT, tokenOut]);
+        const out0 = await uniswapRouter.getAmountsOut(mid0[1], [tokenOut, USDT]);
+        profit0 = out0[1] - opt0;
       }
-    }));
-    setLive(true);
-    arbCount = 0; totalProfit = 0;
-    document.getElementById('sCount').textContent = '0';
-    document.getElementById('sTotal').textContent = '0.00000000';
-  };
+      if (opt1 > 0n) {
+        const mid1 = await uniswapRouter.getAmountsOut(opt1, [USDT, tokenOut]);
+        const out1 = await pancakeRouter.getAmountsOut(mid1[1], [tokenOut, USDT]);
+        profit1 = out1[1] - opt1;
+      }
 
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+      setProfitEl('sProfit0', ethers.formatUnits(profit0, usdtDecimals));
+      setProfitEl('sProfit1', ethers.formatUnits(profit1, usdtDecimals));
 
-    if (msg.type === 'price') {
-      document.getElementById('sPancake').textContent = parseFloat(msg.pancakePrice).toFixed(6);
-      document.getElementById('sUniswap').textContent = parseFloat(msg.uniswapPrice).toFixed(6);
-      document.getElementById('sPancakeSub').textContent = `USDT / ${msg.tokenOutSymbol}`;
-      document.getElementById('sUniswapSub').textContent = `USDT / ${msg.tokenOutSymbol}`;
-      setProfitEl('sProfit0', msg.profit0);
-      setProfitEl('sProfit1', msg.profit1);
-      const best = Math.max(parseFloat(msg.profit0), parseFloat(msg.profit1));
+      const best = profit0 > profit1 ? profit0 : profit1;
       const bEl = document.getElementById('sBest');
-      bEl.textContent = (best >= 0 ? '+' : '') + best.toFixed(8) + ' USDT';
-      bEl.className = 'spread-val ' + (best > 0 ? 'pos' : 'neg');
-      ['cardPancake','cardUniswap'].forEach(id => document.getElementById(id).classList.add('active'));
-      log('price', `Pancake: ${parseFloat(msg.pancakePrice).toFixed(6)} | Uniswap: ${parseFloat(msg.uniswapPrice).toFixed(6)} | P→U: ${fmtProfit(msg.profit0)} | U→P: ${fmtProfit(msg.profit1)} USDT`);
-    }
-    else if (msg.type === 'arb_signal') {
-      log('arb', `⚡ 发现价差！${msg.direction} 最优投入 ${parseFloat(msg.optimalIn).toFixed(8)} USDT 预期利润 ${fmtProfit(msg.profit)} USDT — 前端执行交易中...`);
-      executeArbitrage(msg);
-    }
-    else if (msg.type === 'info') {
-      log('info', msg.msg);
-    }
-    else if (msg.type === 'error') {
-      log('fail', `⚠ ${msg.msg}`);
-    }
-  };
+      bEl.textContent = (best >= 0n ? '+' : '') + ethers.formatUnits(best, usdtDecimals).slice(0, 10) + ' USDT';
+      bEl.className = 'spread-val ' + (best > 0n ? 'pos' : 'neg');
 
-  ws.onclose = () => setLive(false);
+      log('price', `Pancake: ${ethers.formatUnits(pancakePrice, tokenOutDecimals).slice(0, 10)} | Uniswap: ${ethers.formatUnits(uniswapPrice, tokenOutDecimals).slice(0, 10)} | P→U: ${fmtProfit(ethers.formatUnits(profit0, usdtDecimals))} | U→P: ${fmtProfit(ethers.formatUnits(profit1, usdtDecimals))} USDT`);
+
+      if (profit0 > minProfitBig && opt0 > 0n) {
+        await executeArbitrage(USDT, tokenOut, opt0, minProfitBig, true, ethers.formatUnits(profit0, usdtDecimals), 'Pancake买→Uniswap卖');
+      } else if (profit1 > minProfitBig && opt1 > 0n) {
+        await executeArbitrage(USDT, tokenOut, opt1, minProfitBig, false, ethers.formatUnits(profit1, usdtDecimals), 'Uniswap买→Pancake卖');
+      }
+    } catch (e) {
+      log('fail', `⚠ ${e.message}`);
+    }
+  }, 3000);
 };
 
-async function executeArbitrage(signal) {
+async function executeArbitrage(tokenIn, tokenOut, amountIn, minProfit, buyOnPancake, profit, direction) {
   try {
     const provider = new ethers.JsonRpcProvider(document.getElementById('rpc').value.trim());
     const signer = new ethers.Wallet(importedKey, provider);
@@ -373,43 +439,52 @@ async function executeArbitrage(signal) {
       ['function arbitrage(address tokenIn, address tokenOut, uint256 amountIn, uint256 minProfit, bool buyOnPancake) external'],
       signer);
 
-    const minProfit = ethers.parseUnits(document.getElementById('minProfit').value.trim(), 18);
-    const tx = await arb.arbitrage('0x55d398326f99059fF775485246999027B3197955', signal.tokenOut, signal.amountIn, minProfit, signal.buyOnPancake);
+    log('arb', `⚡ 发现价差！${direction} 最优投入 ${ethers.formatUnits(amountIn, 18).slice(0, 10)} USDT 预期利润 ${fmtProfit(profit)} USDT — 前端执行交易中...`);
+
+    const tx = await arb.arbitrage(tokenIn, tokenOut, amountIn, minProfit, buyOnPancake);
     log('arb', `📤 已广播 → <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${tx.hash}')">${tx.hash}</span>`);
 
     const receipt = await tx.wait();
     arbCount++;
-    totalProfit += parseFloat(signal.profit);
+    totalProfit += parseFloat(profit);
     document.getElementById('sCount').textContent = arbCount;
     document.getElementById('sTotal').textContent = totalProfit.toFixed(8);
     document.getElementById('cardCount').classList.add('active');
     document.getElementById('cardProfit').classList.add('active');
-    log('done', `✅ 套利成功！利润 ${fmtProfit(signal.profit)} USDT | Gas: ${receipt.gasUsed.toString()} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${receipt.hash}')">${receipt.hash}</span>`);
+    log('done', `✅ 套利成功！利润 ${fmtProfit(profit)} USDT | Gas: ${receipt.gasUsed.toString()} | <span class="l-hash" onclick="window.open('https://bscscan.com/tx/${receipt.hash}')">${receipt.hash}</span>`);
 
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'arb_done',
-        walletAddress: wallet.getAddress(),
-        hash: receipt.hash,
-        profit: signal.profit,
-        gasUsed: receipt.gasUsed.toString(),
-        tokenOut: signal.tokenOut,
-        direction: signal.direction,
-      }));
-    }
+    fetch('/api/save-record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        address: wallet.getAddress(),
+        tokenOut: tokenOut,
+        record: {
+          ts: new Date().toISOString(),
+          hash: receipt.hash,
+          direction,
+          tokenOut,
+          profit,
+          gasUsed: receipt.gasUsed.toString(),
+        }
+      })
+    });
 
     setTimeout(() => {
       updateWalletStatus();
       loadTokenStats();
     }, 1000);
   } catch (e) {
-    log('fail', `❌ 套利失败：${e.message}`);
+    // 失败时不显示日志
   }
 }
 
 document.getElementById('btnStop').onclick = () => {
-  ws.onclose = () => setLive(false);
-  if (ws) { ws.send(JSON.stringify({ type: 'stop' })); ws.close(); }
+  if (monitorInterval) {
+    clearInterval(monitorInterval);
+    monitorInterval = null;
+  }
+  setLive(false);
 };
 </script>
 </body>
