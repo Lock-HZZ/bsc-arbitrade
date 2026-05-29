@@ -175,9 +175,9 @@
       document.querySelectorAll('.token-item').forEach((el, i) => {
         el.classList.toggle('active', i === index);
       });
-      document.getElementById('selectedTokenInfo').textContent = tokenAddr.slice(0, 10) + '...';
+      document.getElementById('selectedTokenInfo').textContent = tokenAddr;
       document.getElementById('whitelistSection').classList.remove('hidden');
-      log(`已选择代币: ${tokenAddr.slice(0, 10)}...`);
+      log(`已选择代币: ${tokenAddr}`);
     };
 
     window.createToken = async () => {
